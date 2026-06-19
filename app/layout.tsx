@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "chessground/assets/chessground.base.css";
 import "chessground/assets/chessground.brown.css";
 import "chessground/assets/chessground.cburnett.css";
+import "streamdown/styles.css";
 import "./globals.css";
 
 const geistSans = Geist({

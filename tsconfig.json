@@ -15,6 +15,9 @@
     "incremental": true,
     "plugins": [
       {
+        "name": "workflow"
+      },
+      {
         "name": "next"
       }
     ],

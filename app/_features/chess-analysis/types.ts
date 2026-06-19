@@ -1,0 +1,37 @@
+import type {
+  ChessAnalysisResult,
+  ChessAnalysisStatusResponse,
+  ChessPosition,
+  ChessPositionEvaluation,
+} from "@/lib/chess-analysis-types";
+
+export type AnalysisProgress = {
+  positions: ChessPosition[];
+  evaluations: ChessPositionEvaluation[];
+  totalPositions?: number;
+};
+
+export type BoardSide = "white" | "black";
+
+export type AiTutorPhase =
+  | "idle"
+  | "preparing-summary"
+  | "ai-evaluation"
+  | "ready"
+  | "error";
+
+export type ChessAnalysisRequestState =
+  | { kind: "idle" }
+  | { kind: "submitting" }
+  | {
+      kind: "polling";
+      runId: string;
+      status: ChessAnalysisStatusResponse["status"];
+      progress: AnalysisProgress;
+    }
+  | {
+      kind: "completed";
+      runId: string;
+      result: ChessAnalysisResult;
+    }
+  | { kind: "error"; message: string; runId?: string };
