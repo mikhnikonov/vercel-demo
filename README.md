@@ -129,7 +129,6 @@ The tutor route intentionally uses AI SDK primitives instead of hand-parsing cha
 ```bash
 npm install --legacy-peer-deps
 npm run dev
-npm test
 ```
 
 Then open `http://localhost:3000`.
