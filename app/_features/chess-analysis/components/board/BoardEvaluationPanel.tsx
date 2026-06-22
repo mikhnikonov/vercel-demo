@@ -2,47 +2,35 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import type { ChessAnalysisResult } from "@/lib/chess-analysis-types";
-import AnimatedChessground from "@/app/_components/AnimatedChessground";
+import { STARTING_FEN } from "@/lib/chess/pgn";
 import {
   clampPositionIndex,
   getEvaluationForPosition,
   getPositionLabel,
   getSourceLabel,
-} from "../lib/analysis-progress";
-import { getPgnPlayback, getPgnPlaybackKey } from "../lib/pgn-playback";
-import { BOARD_MOVE_INTERVAL_MS, STARTING_FEN } from "../config/constants";
+} from "../../lib/analysis-progress";
+import { getPgnPlayback } from "../../lib/pgn-playback";
+import { BOARD_MOVE_INTERVAL_MS } from "../../config/constants";
+import { AnimatedChessground } from "./AnimatedChessground";
 import { BoardSideSwitch } from "./BoardSideSwitch";
 import { EvaluationBlock } from "./EvaluationBlock";
 import { EvaluationSummary } from "./EvaluationSummary";
-import { Metric } from "./Metric";
+import { Metric } from "../shared/Metric";
 import { MoveNavigationControls } from "./MoveNavigationControls";
-import type { AnalysisProgress, BoardSide } from "../types";
+import { useChessAnalysis } from "../../state/ChessAnalysisProvider";
 
-type BoardEvaluationPanelProps = {
-  onPlayerSideChange: (side: BoardSide) => void;
-  playbackRunKey: number;
-  playerSide: BoardSide;
-  pgn: string;
-  progress: AnalysisProgress;
-  result: ChessAnalysisResult | null;
-};
-
-export function BoardEvaluationPanel({
-  onPlayerSideChange,
-  playbackRunKey,
-  playerSide,
-  pgn,
-  progress,
-  result,
-}: BoardEvaluationPanelProps) {
+export function BoardEvaluationPanel() {
+  const {
+    boardPgn,
+    playbackRunKey,
+    playerSide,
+    progress,
+    result,
+    setPlayerSide,
+  } = useChessAnalysis();
   const [boardPositionIndex, setBoardPositionIndex] = useState(0);
   const [manualNavigation, setManualNavigation] = useState(false);
-  const playback = useMemo(() => getPgnPlayback(pgn), [pgn]);
-  const playbackKey = useMemo(
-    () => getPgnPlaybackKey(playback.positions),
-    [playback.positions]
-  );
+  const playback = useMemo(() => getPgnPlayback(boardPgn), [boardPgn]);
   const playbackPositions = playback.positions;
   const completed = Boolean(result);
   const currentIndex = clampPositionIndex(
@@ -106,7 +94,6 @@ export function BoardEvaluationPanel({
   }, [
     boardPositionIndex,
     manualNavigation,
-    playbackKey,
     playbackRunKey,
     playbackPositions.length,
   ]);
@@ -140,7 +127,7 @@ export function BoardEvaluationPanel({
         <div className="mt-4 space-y-4">
           <BoardSideSwitch
             side={playerSide}
-            onSideChange={onPlayerSideChange}
+            onSideChange={setPlayerSide}
           />
 
           <div className="aspect-square overflow-hidden rounded-md border border-zinc-200 bg-zinc-100">

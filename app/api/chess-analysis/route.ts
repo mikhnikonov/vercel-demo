@@ -1,24 +1,44 @@
 import { getRun, start, type Run } from "workflow/api";
+import { z } from "zod";
 
-import { CHESS_ANALYSIS_STREAM_NAMESPACE } from "@/lib/chess-analysis-types";
+import { jsonError } from "@/app/api/_lib/responses";
+import { delay } from "@/lib/async";
+import { parsePgnPositions } from "@/lib/chess/pgn";
+import { CHESS_ANALYSIS_STREAM_NAMESPACE } from "@/lib/chess/types";
+import { isFailedChessAnalysisStatus } from "@/lib/chess/workflow-status";
+import { readJsonBody } from "@/lib/http";
 import type {
   ChessAnalysisStreamResponseEvent,
   ChessAnalysisResult,
   ChessAnalysisStatusResponse,
   ChessAnalysisWorkflowStreamEvent,
-} from "@/lib/chess-analysis-types";
+} from "@/lib/chess/types";
 import { analyzePgnWorkflow } from "@/workflows/chess-analysis";
 
 export const maxDuration = 30;
 
-export async function POST(request: Request) {
-  const body = (await request.json().catch(() => null)) as {
-    pgn?: unknown;
-  } | null;
-  const pgn = typeof body?.pgn === "string" ? body.pgn.trim() : "";
+const START_ANALYSIS_SCHEMA = z.object({
+  pgn: z.string().trim().min(1, "PGN is required."),
+});
 
-  if (!pgn) {
-    return Response.json({ error: "PGN is required." }, { status: 400 });
+export async function POST(request: Request) {
+  const parsedBody = START_ANALYSIS_SCHEMA.safeParse(
+    await readJsonBody(request)
+  );
+
+  if (!parsedBody.success) {
+    return jsonError("PGN is required.", 400);
+  }
+
+  const pgn = parsedBody.data.pgn;
+  const parsedPgn = parsePgnPositions(pgn);
+
+  if (parsedPgn.error) {
+    return jsonError(`The PGN could not be parsed: ${parsedPgn.error}`, 400);
+  }
+
+  if (parsedPgn.positions.length < 2) {
+    return jsonError("The PGN did not contain any moves to analyze.", 400);
   }
 
   const run = await start(analyzePgnWorkflow, [{ pgn }]);
@@ -34,16 +54,16 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const runId = searchParams.get("runId");
+  const runId = searchParams.get("runId")?.trim();
 
   if (!runId) {
-    return Response.json({ error: "runId is required." }, { status: 400 });
+    return jsonError("runId is required.", 400);
   }
 
   const run = getRun<ChessAnalysisResult>(runId);
 
   if (!(await run.exists)) {
-    return Response.json({ error: "Workflow run not found." }, { status: 404 });
+    return jsonError("Workflow run not found.", 404);
   }
 
   const status = await run.status;
@@ -90,12 +110,14 @@ function createRunUpdateStream(
         controller.close();
       }
 
+      // The workflow stream carries progress events; terminal failures are
+      // observed separately from run.status so the client is not left polling.
       async function watchTerminalStatus() {
         try {
           while (!closed) {
             const status = await run.status;
 
-            if (status === "failed" || status === "cancelled") {
+            if (isFailedChessAnalysisStatus(status)) {
               enqueue({ type: "status", runId: run.runId, status });
               close();
               await reader?.cancel().catch(() => undefined);
@@ -104,12 +126,11 @@ function createRunUpdateStream(
 
             await delay(1000);
           }
-        } catch (error) {
+        } catch {
           enqueue({
             type: "error",
             runId: run.runId,
-            message:
-              error instanceof Error ? error.message : "Unable to watch run.",
+            message: "Unable to watch workflow status.",
           });
           close();
           await reader?.cancel().catch(() => undefined);
@@ -134,11 +155,11 @@ function createRunUpdateStream(
 
             enqueue({ ...value, runId: run.runId });
           }
-        } catch (error) {
+        } catch {
           enqueue({
             type: "error",
             runId: run.runId,
-            message: error instanceof Error ? error.message : "Stream failed.",
+            message: "Workflow stream failed.",
           });
         } finally {
           close();
@@ -152,8 +173,4 @@ function createRunUpdateStream(
       return reader?.cancel();
     },
   });
-}
-
-function delay(milliseconds: number) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

@@ -1,26 +1,21 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import type { ChatStatus } from "ai";
+import { DefaultChatTransport, type ChatStatus } from "ai";
 import { useEffect, useMemo, useRef } from "react";
 import { Streamdown } from "streamdown";
 
-import type { ChessAnalysisResult } from "@/lib/chess-analysis-types";
-import type { AiTutorPhase } from "../types";
+import { getJsonErrorMessage } from "@/lib/http";
+import type { PlayerSide } from "@/lib/chess/types";
+import type { AiTutorPhase } from "../../types";
 import {
   buildTutorPrompt,
   countByCategory,
   createGameSummary,
   getQualityLabel,
-  type PlayerSide,
   type MoveQuality,
-} from "../lib/game-summary";
-
-type AiTutorPanelProps = {
-  onTutorPhaseChange: (phase: AiTutorPhase) => void;
-  playerSide: PlayerSide;
-  result: ChessAnalysisResult | null;
-};
+} from "../../lib/game-summary";
+import { useChessAnalysis } from "../../state/ChessAnalysisProvider";
 
 const CATEGORY_ORDER: MoveQuality[] = [
   "bestMove",
@@ -29,11 +24,37 @@ const CATEGORY_ORDER: MoveQuality[] = [
   "blunder",
 ];
 
-export function AiTutorPanel({
-  onTutorPhaseChange,
-  playerSide,
-  result,
-}: AiTutorPanelProps) {
+const CHAT_ERROR_FALLBACK = "AI tutor could not generate a review.";
+
+const CHAT_TRANSPORT = new DefaultChatTransport({
+  api: "/api/chat",
+  fetch: fetchChatResponse,
+});
+
+async function fetchChatResponse(input: RequestInfo | URL, init?: RequestInit) {
+  const response = await fetch(input, init);
+
+  if (response.ok) {
+    return response;
+  }
+
+  throw new Error(await getChatErrorMessage(response));
+}
+
+async function getChatErrorMessage(response: Response) {
+  const contentType = response.headers.get("content-type");
+
+  if (contentType?.includes("application/json")) {
+    const data = await response.json().catch(() => null);
+    return getJsonErrorMessage(data, CHAT_ERROR_FALLBACK);
+  }
+
+  const message = await response.text().catch(() => "");
+  return message.trim() || CHAT_ERROR_FALLBACK;
+}
+
+export function AiTutorPanel() {
+  const { playerSide, result, setTutorPhase } = useChessAnalysis();
   const submittedSummaryKey = useRef<string | undefined>(undefined);
   const {
     error: chatError,
@@ -42,7 +63,7 @@ export function AiTutorPanel({
     sendMessage,
     status: chatStatus,
     clearError,
-  } = useChat();
+  } = useChat({ transport: CHAT_TRANSPORT });
   const summary = useMemo(
     () => (result ? createGameSummary(result, playerSide) : null),
     [playerSide, result]
@@ -59,8 +80,8 @@ export function AiTutorPanel({
   });
 
   useEffect(() => {
-    onTutorPhaseChange(tutorPhase);
-  }, [onTutorPhaseChange, tutorPhase]);
+    setTutorPhase(tutorPhase);
+  }, [setTutorPhase, tutorPhase]);
 
   useEffect(() => {
     if (summary) {
@@ -200,7 +221,12 @@ export function AiTutorPanel({
       ) : null}
 
       {chatError ? (
-        <p className="mt-3 text-sm text-red-700">{chatError.message}</p>
+        <p
+          className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+          role="status"
+        >
+          {chatError.message || CHAT_ERROR_FALLBACK}
+        </p>
       ) : null}
     </section>
   );

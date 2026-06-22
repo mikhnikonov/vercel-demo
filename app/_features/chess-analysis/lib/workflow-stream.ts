@@ -1,4 +1,5 @@
-import type { ChessAnalysisStreamResponseEvent } from "@/lib/chess-analysis-types";
+import type { ChessAnalysisStreamResponseEvent } from "@/lib/chess/types";
+import { getJsonErrorMessage, readJsonBody } from "@/lib/http";
 
 export async function consumeWorkflowUpdates(
   stream: ReadableStream<Uint8Array>,
@@ -49,15 +50,8 @@ export function parseBufferedWorkflowUpdates(
 }
 
 export async function readStartErrorMessage(response: Response) {
-  try {
-    const data = (await response.json()) as { error?: unknown };
-
-    if (typeof data.error === "string") {
-      return data.error;
-    }
-  } catch {
-    // Fall through to the generic message below.
-  }
-
-  return "Unable to start workflow.";
+  return getJsonErrorMessage(
+    await readJsonBody(response),
+    "Unable to start workflow."
+  );
 }

@@ -1,4 +1,4 @@
-import type { BoardSide } from "../types";
+import type { BoardSide } from "../../types";
 
 type BoardSideSwitchProps = {
   side: BoardSide;

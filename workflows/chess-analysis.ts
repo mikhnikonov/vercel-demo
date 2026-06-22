@@ -1,13 +1,15 @@
 import { FatalError, getWritable } from "workflow";
 
-import { CHESS_ANALYSIS_STREAM_NAMESPACE } from "@/lib/chess-analysis-types";
+import { getChessApiEvaluation } from "@/lib/chess/chess-api";
+import { parsePgnPositions } from "@/lib/chess/pgn";
+import { CHESS_ANALYSIS_STREAM_NAMESPACE } from "@/lib/chess/types";
 import type {
   ChessAnalysisWorkflowStreamEvent,
   ChessApiEvaluation,
   ChessAnalysisResult,
   ChessPosition,
   ChessPositionEvaluation,
-} from "@/lib/chess-analysis-types";
+} from "@/lib/chess/types";
 
 type ChessAnalysisInput = {
   pgn: string;
@@ -71,71 +73,23 @@ export async function extractPositionsFromPgn(
 ): Promise<ChessPosition[]> {
   "use step";
 
-  const { Chess } = await import("chess.js");
-  const chess = new Chess();
+  const result = parsePgnPositions(pgn);
 
-  try {
-    chess.loadPgn(pgn, { strict: false });
-  } catch (error) {
-    throw new FatalError(
-      error instanceof Error
-        ? `The PGN could not be parsed: ${error.message}`
-        : "The PGN could not be parsed."
-    );
+  if (result.error) {
+    throw new FatalError(`The PGN could not be parsed: ${result.error}`);
   }
 
-  const moves = chess.history({ verbose: true });
-
-  if (moves.length === 0) {
-    return [];
-  }
-
-  const positions: ChessPosition[] = [
-    {
-      ply: 0,
-      moveNumber: 0,
-      san: "start",
-      lan: "start",
-      fen: moves[0].before,
-      sideToMove: "w",
-    },
-  ];
-
-  positions.push(
-    ...moves.map((move, index) => {
-      const sideToMove: "w" | "b" =
-        move.after.split(" ")[1] === "b" ? "b" : "w";
-
-      return {
-        ply: index + 1,
-        moveNumber: Math.ceil((index + 1) / 2),
-        san: move.san,
-        lan: move.lan,
-        fen: move.after,
-        sideToMove,
-      };
-    })
-  );
-
-  return positions;
+  return result.positions;
 }
 
 async function streamPosition(position: ChessPosition, totalPositions: number) {
   "use step";
 
-  const writer = getWritable<ChessAnalysisWorkflowStreamEvent>({
-    namespace: CHESS_ANALYSIS_STREAM_NAMESPACE,
-  }).getWriter();
-
-  try {
-    await writer.write({
-      type: "position",
-      position,
-      totalPositions,
-    });
-  } finally {
-    writer.releaseLock();
-  }
+  await writeClientUpdate({
+    type: "position",
+    position,
+    totalPositions,
+  });
 }
 
 export async function fetchChessApiEvaluation(
@@ -145,67 +99,7 @@ export async function fetchChessApiEvaluation(
 ): Promise<ChessApiEvaluation> {
   "use step";
 
-  const response = await fetch("https://chess-api.com/v1", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      fen: position.fen,
-      variants: 1,
-      depth: 12,
-      maxThinkingTime: 50,
-    }),
-  });
-
-  let data: unknown;
-
-  try {
-    data = await response.json();
-  } catch {
-    data = undefined;
-  }
-
-  if (!response.ok) {
-    const evaluation: ChessApiEvaluation = {
-      available: false,
-      status: response.status,
-      error:
-        typeof data === "object" && data !== null && "error" in data
-          ? String((data as { error: unknown }).error)
-          : "chess-api.com did not return an evaluation.",
-      raw: data,
-    };
-
-    await streamEvaluation(position, evaluation, evaluatedCount, totalPositions);
-
-    return evaluation;
-  }
-
-  const record = data as Partial<ChessApiEvaluation>;
-
-  const evaluation: ChessApiEvaluation = {
-    available: true,
-    text: asString(record.text),
-    fen: asString(record.fen),
-    eval: asNumber(record.eval),
-    centipawns: asString(record.centipawns),
-    mate:
-      typeof record.mate === "number" || record.mate === null
-        ? record.mate
-        : undefined,
-    move: asString(record.move),
-    san: asString(record.san),
-    lan: asString(record.lan),
-    depth: asNumber(record.depth),
-    winChance: asNumber(record.winChance),
-    continuationArr: Array.isArray(record.continuationArr)
-      ? record.continuationArr.filter(
-          (move): move is string => typeof move === "string"
-        )
-      : undefined,
-    raw: data,
-  };
+  const evaluation = await getChessApiEvaluation(position);
 
   await streamEvaluation(position, evaluation, evaluatedCount, totalPositions);
 
@@ -218,17 +112,21 @@ async function streamEvaluation(
   evaluatedCount: number,
   totalPositions: number
 ) {
+  await writeClientUpdate({
+    type: "evaluation",
+    item: { position, evaluation },
+    evaluatedCount,
+    totalPositions,
+  });
+}
+
+async function writeClientUpdate(event: ChessAnalysisWorkflowStreamEvent) {
   const writer = getWritable<ChessAnalysisWorkflowStreamEvent>({
     namespace: CHESS_ANALYSIS_STREAM_NAMESPACE,
   }).getWriter();
 
   try {
-    await writer.write({
-      type: "evaluation",
-      item: { position, evaluation },
-      evaluatedCount,
-      totalPositions,
-    });
+    await writer.write(event);
   } finally {
     writer.releaseLock();
   }
@@ -240,12 +138,4 @@ async function closeClientUpdateStream(): Promise<void> {
   await getWritable({
     namespace: CHESS_ANALYSIS_STREAM_NAMESPACE,
   }).close();
-}
-
-function asString(value: unknown) {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asNumber(value: unknown) {
-  return typeof value === "number" ? value : undefined;
 }

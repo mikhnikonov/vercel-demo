@@ -2,7 +2,7 @@ import type {
   ChessAnalysisResult,
   ChessPosition,
   ChessPositionEvaluation,
-} from "@/lib/chess-analysis-types";
+} from "@/lib/chess/types";
 import type {
   AnalysisProgress,
   ChessAnalysisRequestState,
@@ -91,15 +91,19 @@ export function getSourceLabel(
   }
 
   if (result?.source === "partial") {
-    return "Partial";
+    return `${result.evaluations.availableCount}/${result.positions.count} available`;
   }
 
   if (result?.source === "none") {
-    return "Unavailable";
+    return "Engine unavailable";
   }
 
   if (progress.evaluations.length > 0) {
-    return `${progress.evaluations.length}/${progress.totalPositions ?? progress.positions.length}`;
+    const availableCount = progress.evaluations.filter(
+      (item) => item.evaluation.available
+    ).length;
+
+    return `${availableCount}/${progress.totalPositions ?? progress.positions.length} available`;
   }
 
   if (progress.positions.length > 0) {

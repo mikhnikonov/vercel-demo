@@ -1,34 +1,67 @@
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { convertToModelMessages, streamText, type UIMessage } from 'ai';
+import {
+  convertToModelMessages,
+  safeValidateUIMessages,
+  streamText,
+  type UIMessage,
+} from "ai";
+import { z } from "zod";
 
-const openrouter = createOpenRouter({
-    apiKey: process.env.OPENROUTER_API_KEY,
-});
+import { getOpenRouterModel } from "@/app/api/_lib/openrouter";
+import { jsonError } from "@/app/api/_lib/responses";
+import { readJsonBody } from "@/lib/http";
 
 const TUTOR_SYSTEM_PROMPT = `You are a concise chess tutor. Format the response in Markdown. No yapping; keep it concise.
 
 Do not grade the opponent's play except where it explains the player's opportunity or mistake. Focus on the player's game style, recurring decision patterns, and the mistakes they should train.
 
-Use these classification rules:
-- bestMove: the engine best move from the previous position equals the played move.
-- goodMove: from the moving side's perspective, the eval stayed level or improved.
-- mistake: from the moving side's perspective, the eval dropped by less than 1 pawn.
-- blunder: the player missed a forced mate, or the eval dropped by 1 pawn or more.`;
+Treat the move classifications supplied by the user message as authoritative. Do not reclassify Good moves as mistakes just because they differ from the engine best move.`;
 
-export async function POST(req: Request) {
-    const { messages }: { messages: UIMessage[] } = await req.json();
+const CHAT_REQUEST_SCHEMA = z.object({
+  messages: z.unknown(),
+});
 
-    const result = streamText({
-        // Free random model router:
-        model: openrouter('openrouter/free'),
-        system: TUTOR_SYSTEM_PROMPT,
+export const maxDuration = 30;
 
-        // Or choose a specific model:
-        // model: openrouter('meta-llama/llama-3.2-3b-instruct:free'),
-        // model: openrouter('google/gemini-2.5-flash'),
+export async function POST(request: Request) {
+  const model = getOpenRouterModel();
 
-        messages: await convertToModelMessages(messages),
-    });
+  if (!model) {
+    return jsonError(
+      "AI evaluation is not available because OPENROUTER_API_KEY is missing.",
+      503
+    );
+  }
 
-    return result.toUIMessageStreamResponse();
+  const parsedBody = CHAT_REQUEST_SCHEMA.safeParse(
+    await readJsonBody(request)
+  );
+
+  if (!parsedBody.success) {
+    return jsonError("messages are required.", 400);
+  }
+
+  const validatedMessages = await safeValidateUIMessages<UIMessage>({
+    messages: parsedBody.data.messages,
+  });
+
+  if (!validatedMessages.success) {
+    return jsonError("Invalid chat messages.", 400);
+  }
+
+  const messages = validatedMessages.data;
+  const result = streamText({
+    maxOutputTokens: 700,
+    messages: await convertToModelMessages(messages),
+    model,
+    system: TUTOR_SYSTEM_PROMPT,
+    temperature: 0.2,
+  });
+
+  return result.toUIMessageStreamResponse({
+    onError(error) {
+      console.error("AI tutor stream failed", error);
+      return "AI tutor failed to generate a response.";
+    },
+    originalMessages: messages,
+  });
 }

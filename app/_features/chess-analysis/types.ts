@@ -3,7 +3,8 @@ import type {
   ChessAnalysisStatusResponse,
   ChessPosition,
   ChessPositionEvaluation,
-} from "@/lib/chess-analysis-types";
+  PlayerSide,
+} from "@/lib/chess/types";
 
 export type AnalysisProgress = {
   positions: ChessPosition[];
@@ -11,7 +12,7 @@ export type AnalysisProgress = {
   totalPositions?: number;
 };
 
-export type BoardSide = "white" | "black";
+export type BoardSide = PlayerSide;
 
 export type AiTutorPhase =
   | "idle"

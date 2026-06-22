@@ -2,16 +2,17 @@ import type {
   ChessAnalysisResult,
   ChessPosition,
   ChessPositionEvaluation,
-} from "@/lib/chess-analysis-types";
+  PlayerSide,
+} from "@/lib/chess/types";
 
 export type MoveQuality = "bestMove" | "goodMove" | "mistake" | "blunder";
-export type PlayerSide = "white" | "black";
 
 export type ClassifiedMove = {
   category: MoveQuality;
   currentEval?: number;
   currentMate?: number | null;
   deltaForPlayer?: number;
+  deltaWinChanceForPlayer?: number;
   missedMate: boolean;
   moveNumber: number;
   playedBy: PlayerSide;
@@ -36,7 +37,10 @@ export type GameSummary = {
   totalMoveCount: number;
 };
 
-const BLUNDER_THRESHOLD = 1;
+const MISTAKE_EVAL_DROP_THRESHOLD = 0.5;
+const BLUNDER_EVAL_DROP_THRESHOLD = 1.5;
+const MISTAKE_WIN_CHANCE_DROP_THRESHOLD = 10;
+const BLUNDER_WIN_CHANCE_DROP_THRESHOLD = 20;
 const MATE_SCORE = 100;
 
 const QUALITY_LABELS: Record<MoveQuality, string> = {
@@ -158,6 +162,11 @@ Game totals:
 Move classifications:
 ${groupedMoves}
 
+Review rules:
+- Treat the move classifications above as the source of truth.
+- Do not call a Good move a mistake or blunder just because it differed from the engine best move.
+- Small eval or win-chance drops inside the Good move bucket are acceptable engine tolerance.
+
 Give me a practical review of my game. Focus on my blunders and mistakes first, explain the turning points in my decisions, and suggest one or two training themes.`;
 }
 
@@ -200,7 +209,18 @@ function classifyMove(
       ? toPlayerEval(currentEval, playedBy) -
         toPlayerEval(previousEval, playedBy)
       : undefined;
-  const category = getMoveCategory(isBestMove, missedMate, deltaForPlayer);
+  const deltaWinChanceForPlayer =
+    isFiniteNumber(previousEvaluation.winChance) &&
+    isFiniteNumber(currentEvaluation.winChance)
+      ? toPlayerWinChance(currentEvaluation.winChance, playedBy) -
+        toPlayerWinChance(previousEvaluation.winChance, playedBy)
+      : undefined;
+  const category = getMoveCategory({
+    deltaForPlayer,
+    deltaWinChanceForPlayer,
+    isBestMove,
+    missedMate,
+  });
 
   if (!category) {
     return null;
@@ -211,6 +231,7 @@ function classifyMove(
     currentEval,
     currentMate,
     deltaForPlayer,
+    deltaWinChanceForPlayer,
     missedMate,
     moveNumber: position.moveNumber,
     playedBy,
@@ -221,15 +242,29 @@ function classifyMove(
     previousBestMoveSan: previousEvaluation.san,
     previousEval,
     previousMate,
-    reason: getReason(category, isBestMove, missedMate, deltaForPlayer),
+    reason: getReason({
+      category,
+      deltaForPlayer,
+      deltaWinChanceForPlayer,
+      isBestMove,
+      missedMate,
+    }),
   };
 }
 
-function getMoveCategory(
-  isBestMove: boolean,
-  missedMate: boolean,
-  deltaForPlayer: number | undefined
-): MoveQuality | null {
+type MoveCategoryInput = {
+  deltaForPlayer: number | undefined;
+  deltaWinChanceForPlayer: number | undefined;
+  isBestMove: boolean;
+  missedMate: boolean;
+};
+
+function getMoveCategory({
+  deltaForPlayer,
+  deltaWinChanceForPlayer,
+  isBestMove,
+  missedMate,
+}: MoveCategoryInput): MoveQuality | null {
   if (isBestMove) {
     return "bestMove";
   }
@@ -238,15 +273,27 @@ function getMoveCategory(
     return "blunder";
   }
 
+  if (typeof deltaWinChanceForPlayer === "number") {
+    if (deltaWinChanceForPlayer <= -BLUNDER_WIN_CHANCE_DROP_THRESHOLD) {
+      return "blunder";
+    }
+
+    if (deltaWinChanceForPlayer <= -MISTAKE_WIN_CHANCE_DROP_THRESHOLD) {
+      return "mistake";
+    }
+
+    return "goodMove";
+  }
+
   if (typeof deltaForPlayer !== "number") {
     return null;
   }
 
-  if (deltaForPlayer <= -BLUNDER_THRESHOLD) {
+  if (deltaForPlayer <= -BLUNDER_EVAL_DROP_THRESHOLD) {
     return "blunder";
   }
 
-  if (deltaForPlayer < 0) {
+  if (deltaForPlayer <= -MISTAKE_EVAL_DROP_THRESHOLD) {
     return "mistake";
   }
 
@@ -306,8 +353,19 @@ function toPlayerEval(evalValue: number, playedBy: ClassifiedMove["playedBy"]) {
   return playedBy === "white" ? evalValue : -evalValue;
 }
 
+function toPlayerWinChance(
+  winChance: number,
+  playedBy: ClassifiedMove["playedBy"]
+) {
+  return playedBy === "white" ? winChance : 100 - winChance;
+}
+
 function getPlayedByFromPly(ply: number): PlayerSide {
   return ply % 2 === 1 ? "white" : "black";
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function normalizeMove(move: string | undefined) {
@@ -319,12 +377,17 @@ function normalizeMove(move: string | undefined) {
     .replace(/\s+/g, "");
 }
 
-function getReason(
-  category: MoveQuality,
-  isBestMove: boolean,
-  missedMate: boolean,
-  deltaForPlayer: number | undefined
-) {
+type MoveReasonInput = MoveCategoryInput & {
+  category: MoveQuality;
+};
+
+function getReason({
+  category,
+  deltaForPlayer,
+  deltaWinChanceForPlayer,
+  isBestMove,
+  missedMate,
+}: MoveReasonInput) {
   if (isBestMove) {
     return "Matched the engine best move from the previous position.";
   }
@@ -333,16 +396,55 @@ function getReason(
     return "Missed a forced mate available in the previous position.";
   }
 
-  if (typeof deltaForPlayer !== "number") {
+  if (
+    typeof deltaForPlayer !== "number" &&
+    typeof deltaWinChanceForPlayer !== "number"
+  ) {
     return "Adjacent eval was unavailable.";
   }
 
   if (category === "blunder") {
-    return `Eval dropped ${Math.abs(deltaForPlayer).toFixed(2)} pawns for the moving side.`;
+    return `Dropped ${formatLoss(
+      deltaForPlayer,
+      deltaWinChanceForPlayer
+    )} for the moving side.`;
   }
 
   if (category === "mistake") {
-    return `Eval dropped ${Math.abs(deltaForPlayer).toFixed(2)} pawns for the moving side.`;
+    return `Dropped ${formatLoss(
+      deltaForPlayer,
+      deltaWinChanceForPlayer
+    )} for the moving side.`;
+  }
+
+  if (typeof deltaWinChanceForPlayer === "number") {
+    if (deltaWinChanceForPlayer < 0) {
+      return `Win chance dropped ${Math.abs(
+        deltaWinChanceForPlayer
+      ).toFixed(1)} points, within the good-move tolerance.`;
+    }
+
+    if (deltaWinChanceForPlayer === 0) {
+      return "Win chance stayed level.";
+    }
+
+    return `Win chance improved ${deltaWinChanceForPlayer.toFixed(
+      1
+    )} points for the moving side.`;
+  }
+
+  if (typeof deltaForPlayer !== "number") {
+    return "Evaluation stayed within the good-move tolerance.";
+  }
+
+  if (deltaForPlayer < 0) {
+    return `Eval dropped ${Math.abs(
+      deltaForPlayer
+    ).toFixed(2)} pawns, within the good-move tolerance.`;
+  }
+
+  if (deltaForPlayer === 0) {
+    return "Eval stayed level.";
   }
 
   return `Eval improved ${deltaForPlayer.toFixed(2)} pawns for the moving side.`;
@@ -359,9 +461,29 @@ function formatMoveForPrompt(move: ClassifiedMove) {
           move.currentMate
         )}; side delta ${formatSigned(move.deltaForPlayer)}`
       : "";
+  const winChanceText =
+    typeof move.deltaWinChanceForPlayer === "number"
+      ? `; win chance delta ${formatSigned(
+          move.deltaWinChanceForPlayer,
+          1
+        )} points`
+      : "";
   const bestMoveText = move.previousBestMoveSan ?? move.previousBestMove ?? "-";
 
-  return `- ${move.moveNumber}. ${move.playedSan} (${move.playedBy}, ply ${move.ply}): ${move.reason}${evalText}; engine best was ${bestMoveText}.`;
+  return `- ${move.moveNumber}. ${move.playedSan} (${move.playedBy}, ply ${move.ply}): ${move.reason}${evalText}${winChanceText}; engine best was ${bestMoveText}.`;
+}
+
+function formatLoss(
+  deltaForPlayer: number | undefined,
+  deltaWinChanceForPlayer: number | undefined
+) {
+  if (typeof deltaWinChanceForPlayer === "number") {
+    return `${Math.abs(deltaWinChanceForPlayer).toFixed(
+      1
+    )} win-chance points`;
+  }
+
+  return `${Math.abs(deltaForPlayer ?? 0).toFixed(2)} pawns`;
 }
 
 function formatEval(
@@ -375,6 +497,6 @@ function formatEval(
   return typeof value === "number" ? formatSigned(value) : "-";
 }
 
-function formatSigned(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+function formatSigned(value: number, fractionDigits = 2) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(fractionDigits)}`;
 }

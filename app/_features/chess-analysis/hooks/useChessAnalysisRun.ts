@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   ChessAnalysisStreamResponseEvent,
   ChessAnalysisStatusResponse,
-} from "@/lib/chess-analysis-types";
+} from "@/lib/chess/types";
+import { isFailedChessAnalysisStatus } from "@/lib/chess/workflow-status";
+import { getJsonErrorMessage, readJsonBody } from "@/lib/http";
 import {
   appendEvaluation,
   appendPosition,
@@ -44,10 +46,10 @@ export function useChessAnalysisRun() {
 
     async function pollRun() {
       try {
-        const response = await fetch(`/api/chess-analysis?runId=${runId}`);
-        const data = (await response.json()) as
-          | ChessAnalysisStatusResponse
-          | { error?: string };
+        const response = await fetch(
+          `/api/chess-analysis?runId=${encodeURIComponent(runId)}`
+        );
+        const data = await readJsonBody(response);
 
         if (cancelled) {
           return;
@@ -57,7 +59,7 @@ export function useChessAnalysisRun() {
           setRequestState({
             kind: "error",
             runId,
-            message: "error" in data && data.error ? data.error : "Polling failed.",
+            message: getJsonErrorMessage(data, "Polling failed."),
           });
           return;
         }
@@ -73,10 +75,7 @@ export function useChessAnalysisRun() {
           return;
         }
 
-        if (
-          statusData.status === "failed" ||
-          statusData.status === "cancelled"
-        ) {
+        if (isFailedChessAnalysisStatus(statusData.status)) {
           setRequestState({
             kind: "error",
             runId,
@@ -85,15 +84,9 @@ export function useChessAnalysisRun() {
           return;
         }
 
-        setRequestState((current) => ({
-          kind: "polling",
-          runId,
-          status: statusData.status,
-          progress:
-            current.kind === "polling" && current.runId === runId
-              ? current.progress
-              : emptyProgress(),
-        }));
+        setRequestState((current) =>
+          toPollingState(current, runId, statusData.status)
+        );
       } catch (error) {
         if (!cancelled) {
           setRequestState({
@@ -115,102 +108,16 @@ export function useChessAnalysisRun() {
     };
   }, [activeRunId]);
 
-  function applyStreamEvent(streamEvent: ChessAnalysisStreamResponseEvent) {
-    if (streamEvent.type === "started") {
-      setRequestState((current) => {
-        if (isCurrentCompletedRun(current, streamEvent.runId)) {
-          return current;
-        }
+  const applyStreamEvent = useCallback(
+    (streamEvent: ChessAnalysisStreamResponseEvent) => {
+      setRequestState((current) =>
+        getStateAfterStreamEvent(current, streamEvent)
+      );
+    },
+    []
+  );
 
-        return {
-          kind: "polling",
-          runId: streamEvent.runId,
-          status: streamEvent.status,
-          progress:
-            current.kind === "polling" && current.runId === streamEvent.runId
-              ? current.progress
-              : emptyProgress(),
-        };
-      });
-      return;
-    }
-
-    if (streamEvent.type === "position") {
-      setRequestState((current) => {
-        if (isCurrentCompletedRun(current, streamEvent.runId)) {
-          return current;
-        }
-
-        return {
-          kind: "polling",
-          runId: streamEvent.runId,
-          status: getCurrentStatus(current, streamEvent.runId),
-          progress: appendPosition(
-            getCurrentProgress(current, streamEvent.runId),
-            streamEvent.position,
-            streamEvent.totalPositions
-          ),
-        };
-      });
-      return;
-    }
-
-    if (streamEvent.type === "evaluation") {
-      setRequestState((current) => {
-        if (isCurrentCompletedRun(current, streamEvent.runId)) {
-          return current;
-        }
-
-        return {
-          kind: "polling",
-          runId: streamEvent.runId,
-          status: getCurrentStatus(current, streamEvent.runId),
-          progress: appendEvaluation(
-            getCurrentProgress(current, streamEvent.runId),
-            streamEvent.item,
-            streamEvent.totalPositions
-          ),
-        };
-      });
-      return;
-    }
-
-    if (streamEvent.type === "status") {
-      if (
-        streamEvent.status === "failed" ||
-        streamEvent.status === "cancelled"
-      ) {
-        setRequestState({
-          kind: "error",
-          runId: streamEvent.runId,
-          message: `Workflow ${streamEvent.status}.`,
-        });
-        return;
-      }
-
-      setRequestState((current) => {
-        if (isCurrentCompletedRun(current, streamEvent.runId)) {
-          return current;
-        }
-
-        return {
-          kind: "polling",
-          runId: streamEvent.runId,
-          status: streamEvent.status,
-          progress: getCurrentProgress(current, streamEvent.runId),
-        };
-      });
-      return;
-    }
-
-    setRequestState({
-      kind: "error",
-      runId: streamEvent.runId,
-      message: streamEvent.message,
-    });
-  }
-
-  async function runAnalysis() {
+  const runAnalysis = useCallback(async () => {
     setRequestState({ kind: "submitting" });
 
     try {
@@ -246,7 +153,7 @@ export function useChessAnalysisRun() {
           error instanceof Error ? error.message : "Unable to start workflow.",
       });
     }
-  }
+  }, [applyStreamEvent, pgn]);
 
   return {
     isBusy,
@@ -282,4 +189,73 @@ function isCurrentCompletedRun(
   runId: string
 ) {
   return state.kind === "completed" && state.runId === runId;
+}
+
+function getStateAfterStreamEvent(
+  state: ChessAnalysisRequestState,
+  event: ChessAnalysisStreamResponseEvent
+): ChessAnalysisRequestState {
+  if (event.runId && isCurrentCompletedRun(state, event.runId)) {
+    return state;
+  }
+
+  if (event.type === "error") {
+    return {
+      kind: "error",
+      message: event.message,
+      runId: event.runId,
+    };
+  }
+
+  if (event.type === "started") {
+    return toPollingState(state, event.runId, event.status);
+  }
+
+  if (event.type === "status") {
+    return isFailedChessAnalysisStatus(event.status)
+      ? {
+          kind: "error",
+          message: `Workflow ${event.status}.`,
+          runId: event.runId,
+        }
+      : toPollingState(state, event.runId, event.status);
+  }
+
+  if (event.type === "position") {
+    return toPollingState(
+      state,
+      event.runId,
+      getCurrentStatus(state, event.runId),
+      appendPosition(
+        getCurrentProgress(state, event.runId),
+        event.position,
+        event.totalPositions
+      )
+    );
+  }
+
+  return toPollingState(
+    state,
+    event.runId,
+    getCurrentStatus(state, event.runId),
+    appendEvaluation(
+      getCurrentProgress(state, event.runId),
+      event.item,
+      event.totalPositions
+    )
+  );
+}
+
+function toPollingState(
+  state: ChessAnalysisRequestState,
+  runId: string,
+  status: ChessAnalysisStatusResponse["status"],
+  progress = getCurrentProgress(state, runId)
+): ChessAnalysisRequestState {
+  return {
+    kind: "polling",
+    progress,
+    runId,
+    status,
+  };
 }

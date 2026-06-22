@@ -1,6 +1,6 @@
-import type { ChessPositionEvaluation } from "@/lib/chess-analysis-types";
-import { formatPercent } from "../lib/analysis-progress";
-import { Metric } from "./Metric";
+import type { ChessPositionEvaluation } from "@/lib/chess/types";
+import { formatPercent } from "../../lib/analysis-progress";
+import { Metric } from "../shared/Metric";
 
 type EvaluationSummaryProps = {
   item: ChessPositionEvaluation;
@@ -20,9 +20,18 @@ export function EvaluationSummary({ item }: EvaluationSummaryProps) {
         </span>
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-3">
-        <Metric label="Eval" value={evaluation.eval ?? evaluation.centipawns ?? "-"} />
-        <Metric label="Win chance" value={formatPercent(evaluation.winChance)} />
-        <Metric label="Best move" value={evaluation.san ?? evaluation.move ?? "-"} />
+        <Metric
+          label="Eval"
+          value={evaluation.eval ?? evaluation.centipawns ?? "-"}
+        />
+        <Metric
+          label="Win chance"
+          value={formatPercent(evaluation.winChance)}
+        />
+        <Metric
+          label="Best move"
+          value={evaluation.san ?? evaluation.move ?? "-"}
+        />
         <Metric label="Mate" value={evaluation.mate ?? "-"} />
       </dl>
       {evaluation.text ? (

@@ -1,4 +1,4 @@
-import type { ChessAnalysisResult } from "@/lib/chess-analysis-types";
+import type { ChessAnalysisResult } from "@/lib/chess/types";
 
 type EvaluationBlockProps = {
   result: ChessAnalysisResult;

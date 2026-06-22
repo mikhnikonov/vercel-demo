@@ -1,28 +1,15 @@
 import type { FormEvent } from "react";
 
+import { EngineHealthNotice } from "./EngineHealthNotice";
 import { StatusLine } from "./StatusLine";
-import type { AiTutorPhase, ChessAnalysisRequestState } from "../types";
+import { useChessAnalysis } from "../../state/ChessAnalysisProvider";
 
-type ChessAnalysisFormProps = {
-  isBusy: boolean;
-  onPgnChange: (pgn: string) => void;
-  onSubmit: () => void;
-  pgn: string;
-  state: ChessAnalysisRequestState;
-  tutorPhase: AiTutorPhase;
-};
+export function ChessAnalysisForm() {
+  const { isBusy, pgn, setPgn, startAnalysis } = useChessAnalysis();
 
-export function ChessAnalysisForm({
-  isBusy,
-  onPgnChange,
-  onSubmit,
-  pgn,
-  state,
-  tutorPhase,
-}: ChessAnalysisFormProps) {
   function submitPgn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    onSubmit();
+    startAnalysis();
   }
 
   return (
@@ -44,7 +31,7 @@ export function ChessAnalysisForm({
           id="pgn"
           className="min-h-[360px] w-full resize-y rounded-md border border-zinc-300 bg-white px-4 py-3 font-mono text-sm leading-6 text-zinc-950 outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-700/10"
           value={pgn}
-          onChange={(event) => onPgnChange(event.target.value)}
+          onChange={(event) => setPgn(event.target.value)}
           spellCheck={false}
         />
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -55,8 +42,9 @@ export function ChessAnalysisForm({
           >
             {isBusy ? "Running" : "Run workflow"}
           </button>
-          <StatusLine state={state} tutorPhase={tutorPhase} />
+          <StatusLine />
         </div>
+        <EngineHealthNotice />
       </form>
     </section>
   );

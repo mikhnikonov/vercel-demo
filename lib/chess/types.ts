@@ -7,6 +7,8 @@ export type ChessPosition = {
   sideToMove: "w" | "b";
 };
 
+export type PlayerSide = "white" | "black";
+
 export type ChessApiEvaluation = {
   available: boolean;
   status?: number;
