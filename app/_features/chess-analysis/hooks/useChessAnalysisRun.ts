@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { ChessAnalysisStatusResponse } from "@/lib/chess/types";
+import type {
+  ChessAnalysisStatusResponse,
+  ChessAnalysisStreamResponseEvent,
+} from "@/lib/chess/types";
 import { isFailedChessAnalysisStatus } from "@/lib/chess/workflow-status";
 import { getJsonErrorMessage, readJsonBody } from "@/lib/http";
 import {
@@ -10,7 +13,10 @@ import {
   getCompletedResult,
   getProgressForState,
 } from "../lib/analysis-progress";
-import { getStateAfterStreamEvent } from "../lib/analysis-run-state";
+import {
+  getStateAfterStreamEvent,
+  toPollingState,
+} from "../lib/analysis-run-state";
 import { SAMPLE_PGN } from "../config/constants";
 import type { ChessAnalysisRequestState } from "../types";
 import {

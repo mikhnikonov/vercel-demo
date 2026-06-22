@@ -89,7 +89,7 @@ export function getStateAfterStreamEvent(
   );
 }
 
-function toPollingState(
+export function toPollingState(
   state: ChessAnalysisRequestState,
   runId: string,
   status: ReturnType<typeof getCurrentStatus>,
