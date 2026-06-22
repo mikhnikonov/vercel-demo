@@ -37,6 +37,8 @@ export type GameSummary = {
   totalMoveCount: number;
 };
 
+// Win chance is preferred when chess-api.com provides it because it better
+// reflects practical move quality than tiny pawn-eval noise in equal positions.
 const MISTAKE_EVAL_DROP_THRESHOLD = 0.5;
 const BLUNDER_EVAL_DROP_THRESHOLD = 1.5;
 const MISTAKE_WIN_CHANCE_DROP_THRESHOLD = 10;
@@ -61,6 +63,8 @@ export function createGameSummary(
   result: ChessAnalysisResult,
   playerSide: PlayerSide
 ): GameSummary {
+  // A played move is classified by comparing the engine eval immediately
+  // before the move with the eval immediately after it.
   const evaluationsByPly = new Map(
     result.evaluations.items.map((item) => [item.position.ply, item])
   );
@@ -105,6 +109,8 @@ export function createGameSummary(
     .map((position) => `${position.ply}:${position.san}`)
     .join(",");
 
+  // The key drives useChat resubmission. Include both the move list and bucket
+  // counts so changing side or classification output triggers a fresh review.
   return {
     analyzedMoveCount,
     categories,
@@ -148,6 +154,8 @@ export function buildTutorPrompt(summary: GameSummary): string {
       ? `\nSkipped moves: ${summary.skippedMoveCount} moves could not be classified because an adjacent evaluation was unavailable.`
       : "";
 
+  // The prompt repeats the classification contract because the LLM should
+  // explain the buckets, not invent a second grading system.
   return `I played this game as ${summary.playerSide}. Review only my ${summary.playerSide} moves from the engine summary below.
 
 Game totals:
@@ -188,6 +196,8 @@ function classifyMove(
   previousItem?: ChessPositionEvaluation,
   currentItem?: ChessPositionEvaluation
 ): ClassifiedMove | null {
+  // Classification needs adjacent available evals. If either side of the move
+  // is missing, the summary skips the move instead of guessing.
   if (
     !previousItem?.evaluation.available ||
     !currentItem?.evaluation.available
@@ -197,6 +207,8 @@ function classifyMove(
 
   const previousEvaluation = previousItem.evaluation;
   const currentEvaluation = currentItem.evaluation;
+  // previousItem is the board before the move, so its side-to-move is the
+  // player who made the move at the current ply.
   const playedBy = previousItem.position.sideToMove === "b" ? "black" : "white";
   const isBestMove = moveMatchesBestMove(position, previousItem);
   const missedMate = hasMateForSideToMove(previousItem) && !isBestMove;
@@ -265,6 +277,8 @@ function getMoveCategory({
   isBestMove,
   missedMate,
 }: MoveCategoryInput): MoveQuality | null {
+  // Matching the engine move is always surfaced separately, even if the eval
+  // barely changes for another playable move.
   if (isBestMove) {
     return "bestMove";
   }
@@ -273,6 +287,8 @@ function getMoveCategory({
     return "blunder";
   }
 
+  // Use win-chance thresholds first; pawn-eval thresholds are only a fallback
+  // for engine responses that do not include winChance.
   if (typeof deltaWinChanceForPlayer === "number") {
     if (deltaWinChanceForPlayer <= -BLUNDER_WIN_CHANCE_DROP_THRESHOLD) {
       return "blunder";
@@ -304,6 +320,8 @@ function moveMatchesBestMove(
   position: ChessPosition,
   previousItem: ChessPositionEvaluation
 ) {
+  // chess-api.com may return the best move as SAN, LAN, UCI-like move text, or
+  // the first continuation item, so normalize all candidates before comparing.
   const playedMoveCandidates = [position.lan, position.san];
   const bestMoveCandidates = [
     previousItem.evaluation.move,
@@ -330,6 +348,8 @@ function hasMateForSideToMove(item: ChessPositionEvaluation) {
 }
 
 function getPositionScore(evaluation: ChessPositionEvaluation["evaluation"]) {
+  // Mate scores are mapped to a large signed pawn value only as a fallback, so
+  // ordinary eval/centipawn values stay the primary numerical comparison.
   if (typeof evaluation.eval === "number") {
     return evaluation.eval;
   }

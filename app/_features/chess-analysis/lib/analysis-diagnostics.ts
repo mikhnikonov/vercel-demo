@@ -18,6 +18,8 @@ export type AnalysisDiagnostics = {
 export function getAnalysisDiagnostics(
   progress: AnalysisProgress
 ): AnalysisDiagnostics {
+  // Unavailable engine responses are not fatal for the workflow, but they need
+  // to become visible diagnostics so the user understands partial tutor output.
   const totalPositions = progress.totalPositions ?? progress.positions.length;
   const engineFailures = progress.evaluations
     .filter((item) => !item.evaluation.available)
@@ -43,6 +45,8 @@ export function getEngineFailureMessage(diagnostics: AnalysisDiagnostics) {
       ? ` of ${diagnostics.totalPositions}`
       : "";
 
+  // Show the first concrete provider error, then explain that adjacent evals
+  // still allow the tutor to classify some moves.
   return [
     `chess-api.com did not evaluate ${diagnostics.failedEvaluationCount}${totalText} positions.`,
     `First failure: ${firstFailure.label} - ${firstFailure.message}`,

@@ -71,6 +71,7 @@ app/
       lib/
         analysis-diagnostics.ts       Engine provider failure summaries for UI notices.
         analysis-progress.ts          Progress/result projection helpers for the UI.
+        analysis-run-state.ts         Pure workflow stream reducer used by `useChessAnalysisRun`.
         game-summary.ts               Move classification and tutor prompt construction.
         pgn-playback.ts               Feature wrapper around shared PGN parsing.
         workflow-stream.ts            NDJSON stream reader for workflow events.
@@ -126,8 +127,9 @@ The tutor route intentionally uses AI SDK primitives instead of hand-parsing cha
 ## Development
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run dev
+npm test
 ```
 
 Then open `http://localhost:3000`.

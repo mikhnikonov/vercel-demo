@@ -15,6 +15,8 @@ export function emptyProgress(): AnalysisProgress {
 export function getProgressForState(
   state: ChessAnalysisRequestState
 ): AnalysisProgress {
+  // Components consume one progress shape whether the data is still streaming
+  // or already came from the completed workflow result.
   if (state.kind === "completed") {
     return progressFromResult(state.result);
   }
@@ -41,6 +43,8 @@ export function appendPosition(
   position: ChessPosition,
   totalPositions: number
 ): AnalysisProgress {
+  // Stream updates can repeat after reconnects or route retries; replace by
+  // ply instead of appending blindly to keep progress idempotent.
   const positions = progress.positions.some((item) => item.ply === position.ply)
     ? progress.positions.map((item) =>
         item.ply === position.ply ? position : item
@@ -59,6 +63,8 @@ export function appendEvaluation(
   item: ChessPositionEvaluation,
   totalPositions: number
 ): AnalysisProgress {
+  // Evaluations are keyed by the position ply because the workflow emits one
+  // engine response per position in PGN order.
   const evaluations = progress.evaluations.some(
     (current) => current.position.ply === item.position.ply
   )
@@ -86,6 +92,8 @@ export function getSourceLabel(
   progress: AnalysisProgress,
   result: ChessAnalysisResult | null
 ) {
+  // Prefer the final source classification once available; otherwise derive a
+  // live label from partial progress so users see provider failures early.
   if (result?.source === "chess-api") {
     return "chess-api.com";
   }
@@ -129,6 +137,8 @@ export function getEvaluationForPosition(
     return undefined;
   }
 
+  // Match both ply and FEN so board playback cannot show a stale eval if a PGN
+  // edit reuses a ply number with a different position.
   return evaluations.find(
     (item) =>
       item.position.ply === position.ply && item.position.fen === position.fen

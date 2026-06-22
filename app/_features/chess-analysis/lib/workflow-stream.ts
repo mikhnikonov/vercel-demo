@@ -5,6 +5,8 @@ export async function consumeWorkflowUpdates(
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: ChessAnalysisStreamResponseEvent) => void
 ) {
+  // Workflow progress is NDJSON, so chunks can split in the middle of an event.
+  // Buffer partial lines until a newline completes the JSON payload.
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -32,6 +34,7 @@ export function parseBufferedWorkflowUpdates(
   buffer: string,
   onEvent: (event: ChessAnalysisStreamResponseEvent) => void
 ) {
+  // Return the unparsed tail so the next network chunk can complete it.
   let nextBuffer = buffer;
   let newlineIndex = nextBuffer.indexOf("\n");
 

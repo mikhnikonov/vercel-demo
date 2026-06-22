@@ -2,20 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type {
-  ChessAnalysisStreamResponseEvent,
-  ChessAnalysisStatusResponse,
-} from "@/lib/chess/types";
+import type { ChessAnalysisStatusResponse } from "@/lib/chess/types";
 import { isFailedChessAnalysisStatus } from "@/lib/chess/workflow-status";
 import { getJsonErrorMessage, readJsonBody } from "@/lib/http";
 import {
-  appendEvaluation,
-  appendPosition,
-  emptyProgress,
   getActiveRunId,
   getCompletedResult,
   getProgressForState,
 } from "../lib/analysis-progress";
+import { getStateAfterStreamEvent } from "../lib/analysis-run-state";
 import { SAMPLE_PGN } from "../config/constants";
 import type { ChessAnalysisRequestState } from "../types";
 import {
@@ -36,6 +31,8 @@ export function useChessAnalysisRun() {
   const isBusy =
     requestState.kind === "submitting" || requestState.kind === "polling";
 
+  // The POST stream gives live progress, but the workflow result is exposed by
+  // GET after completion. Polling is therefore tied only to the active run id.
   useEffect(() => {
     if (!activeRunId) {
       return;
@@ -110,6 +107,8 @@ export function useChessAnalysisRun() {
 
   const applyStreamEvent = useCallback(
     (streamEvent: ChessAnalysisStreamResponseEvent) => {
+      // Keep stream handling as a reducer so late progress events cannot
+      // accidentally overwrite a completed result for the same run.
       setRequestState((current) =>
         getStateAfterStreamEvent(current, streamEvent)
       );
@@ -121,6 +120,8 @@ export function useChessAnalysisRun() {
     setRequestState({ kind: "submitting" });
 
     try {
+      // Starting the workflow returns an NDJSON progress stream immediately;
+      // final result hydration happens through the polling effect above.
       const response = await fetch("/api/chess-analysis", {
         method: "POST",
         headers: {
@@ -163,99 +164,5 @@ export function useChessAnalysisRun() {
     result,
     runAnalysis,
     setPgn,
-  };
-}
-
-function getCurrentProgress(
-  state: ChessAnalysisRequestState,
-  runId: string
-) {
-  return state.kind === "polling" && state.runId === runId
-    ? state.progress
-    : emptyProgress();
-}
-
-function getCurrentStatus(
-  state: ChessAnalysisRequestState,
-  runId: string
-): ChessAnalysisStatusResponse["status"] {
-  return state.kind === "polling" && state.runId === runId
-    ? state.status
-    : "running";
-}
-
-function isCurrentCompletedRun(
-  state: ChessAnalysisRequestState,
-  runId: string
-) {
-  return state.kind === "completed" && state.runId === runId;
-}
-
-function getStateAfterStreamEvent(
-  state: ChessAnalysisRequestState,
-  event: ChessAnalysisStreamResponseEvent
-): ChessAnalysisRequestState {
-  if (event.runId && isCurrentCompletedRun(state, event.runId)) {
-    return state;
-  }
-
-  if (event.type === "error") {
-    return {
-      kind: "error",
-      message: event.message,
-      runId: event.runId,
-    };
-  }
-
-  if (event.type === "started") {
-    return toPollingState(state, event.runId, event.status);
-  }
-
-  if (event.type === "status") {
-    return isFailedChessAnalysisStatus(event.status)
-      ? {
-          kind: "error",
-          message: `Workflow ${event.status}.`,
-          runId: event.runId,
-        }
-      : toPollingState(state, event.runId, event.status);
-  }
-
-  if (event.type === "position") {
-    return toPollingState(
-      state,
-      event.runId,
-      getCurrentStatus(state, event.runId),
-      appendPosition(
-        getCurrentProgress(state, event.runId),
-        event.position,
-        event.totalPositions
-      )
-    );
-  }
-
-  return toPollingState(
-    state,
-    event.runId,
-    getCurrentStatus(state, event.runId),
-    appendEvaluation(
-      getCurrentProgress(state, event.runId),
-      event.item,
-      event.totalPositions
-    )
-  );
-}
-
-function toPollingState(
-  state: ChessAnalysisRequestState,
-  runId: string,
-  status: ChessAnalysisStatusResponse["status"],
-  progress = getCurrentProgress(state, runId)
-): ChessAnalysisRequestState {
-  return {
-    kind: "polling",
-    progress,
-    runId,
-    status,
   };
 }
